@@ -44,6 +44,7 @@ func (s *ReleaseServer) InstallRelease(req *hapi.InstallReleaseRequest) (*releas
 		return rel, errors.Wrap(err, "failed install prepare step")
 	}
 
+	fmt.Printf("Performing install\n")
 	s.Log("performing install for %s", req.Name)
 	res, err := s.performRelease(rel, req)
 	return res, errors.Wrap(err, "failed install perform step")
@@ -76,7 +77,7 @@ func (s *ReleaseServer) prepareRelease(req *hapi.InstallReleaseRequest) (*releas
 	}
 
 	ts := time.Now()
-	hooks, manifestDoc, notesTxt, err := s.renderResources(req.Chart, valuesToRender, caps.APIVersions)
+	hooks, crds, manifestDoc, notesTxt, err := s.renderResources(req.Chart, valuesToRender, caps.APIVersions)
 	if err != nil {
 		// Return a release with partial data so that client can show debugging
 		// information.
@@ -113,13 +114,20 @@ func (s *ReleaseServer) prepareRelease(req *hapi.InstallReleaseRequest) (*releas
 		},
 		Manifest: manifestDoc.String(),
 		Hooks:    hooks,
+		Crds:	  crds,
 		Version:  revision,
 	}
 	if len(notesTxt) > 0 {
 		rel.Info.Notes = notesTxt
 	}
 
-	err = validateManifest(s.KubeClient, req.Namespace, manifestDoc.Bytes())
+	fmt.Printf("Found %d crd(s) in chart\n", len(crds))
+
+	if len(crds) == 0 {
+		err = validateManifest(s.KubeClient, req.Namespace, manifestDoc.Bytes())
+	} else {
+		s.Log("crds found in the chart. Skipping validation...")
+	}
 	return rel, err
 }
 
@@ -179,8 +187,7 @@ func (s *ReleaseServer) performRelease(r *release.Release, req *hapi.InstallRele
 		// nothing to replace, create as normal
 		// regular manifests
 		s.recordRelease(r, false)
-		b := bytes.NewBufferString(r.Manifest)
-		if err := s.KubeClient.Create(r.Namespace, b, req.Timeout, req.Wait); err != nil {
+		if err := s.createRelease(r, req.Timeout, req.Wait); err != nil {
 			msg := fmt.Sprintf("Release %q failed: %s", r.Name, err)
 			s.Log("warning: %s", msg)
 			r.Info.Status = release.StatusFailed
@@ -215,3 +222,16 @@ func (s *ReleaseServer) performRelease(r *release.Release, req *hapi.InstallRele
 
 	return r, nil
 }
+
+func (s *ReleaseServer) createRelease(r *release.Release, timeout int64, wait bool) error {
+	for _, crd := range r.Crds {
+		b := bytes.NewBufferString(crd.Manifest)
+		res, err := s.KubeClient.Get(r.Namespace, b)
+		fmt.Printf("Found error: %v\n", err)
+		fmt.Printf("Found result: %s\n", res)
+	}
+	b := bytes.NewBufferString(r.Manifest)
+	return s.KubeClient.Create(r.Namespace, b, timeout, wait)
+}
+
+

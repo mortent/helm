@@ -33,6 +33,8 @@ type Release struct {
 	Manifest string `json:"manifest,omitempty"`
 	// Hooks are all of the hooks declared for this release.
 	Hooks []*Hook `json:"hooks,omitempty"`
+	// Crds are all of the CRDs declared in this release.
+	Crds []*Crd `json:"crds,omitempty"`
 	// Version is an int which represents the version of the release.
 	Version int `json:"version,omitempty"`
 	// Namespace is the kubernetes namespace of the release.

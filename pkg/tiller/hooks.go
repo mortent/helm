@@ -60,6 +60,7 @@ type Manifest struct {
 
 type result struct {
 	hooks   []*release.Hook
+	crds    []*release.Crd
 	generic []Manifest
 }
 
@@ -78,11 +79,10 @@ type manifestFile struct {
 //
 // Files that do not parse into the expected format are simply placed into a map and
 // returned.
-func SortManifests(files map[string]string, apis chartutil.VersionSet, sort SortOrder) ([]*release.Hook, []Manifest, error) {
+func SortManifests(files map[string]string, apis chartutil.VersionSet, sort SortOrder) ([]*release.Hook, []*release.Crd, []Manifest, error) {
 	result := &result{}
 
 	for filePath, c := range files {
-
 		// Skip partials. We could return these as a separate map, but there doesn't
 		// seem to be any need for that at this time.
 		if strings.HasPrefix(path.Base(filePath), "_") {
@@ -101,11 +101,10 @@ func SortManifests(files map[string]string, apis chartutil.VersionSet, sort Sort
 		}
 
 		if err := manifestFile.sort(result); err != nil {
-			return result.hooks, result.generic, err
+			return result.hooks, result.crds, result.generic, err
 		}
 	}
-
-	return result.hooks, sortByKind(result.generic, sort), nil
+	return result.hooks, result.crds, sortByKind(result.generic, sort), nil
 }
 
 // sort takes a manifestFile object which may contain multiple resource definition
@@ -134,8 +133,12 @@ func (file *manifestFile) sort(result *result) error {
 			return errors.Wrapf(err, "YAML parse error on %s", file.path)
 		}
 
-		if entry.Version != "" && !file.apis.Has(entry.Version) {
-			return errors.Errorf("apiVersion %q in %s is not available", entry.Version, file.path)
+		if entry.Version == "apiextensions.k8s.io/v1beta1" && entry.Kind == "CustomResourceDefinition" {
+			result.crds = append(result.crds, &release.Crd{
+				Name: file.path,
+				Manifest: m,
+			})
+			continue
 		}
 
 		if !hasAnyAnnotation(entry) {

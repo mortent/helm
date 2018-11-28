@@ -40,6 +40,8 @@ import (
 	"k8s.io/helm/pkg/storage/driver"
 	"k8s.io/helm/pkg/tiller/environment"
 	"k8s.io/helm/pkg/version"
+	"fmt"
+	"reflect"
 )
 
 // releaseNameMaxLen is the maximum length of a release name.
@@ -222,12 +224,12 @@ func GetVersionSet(client discovery.ServerGroupsInterface) (chartutil.VersionSet
 	return chartutil.NewVersionSet(versions...), nil
 }
 
-func (s *ReleaseServer) renderResources(ch *chart.Chart, values chartutil.Values, vs chartutil.VersionSet) ([]*release.Hook, *bytes.Buffer, string, error) {
+func (s *ReleaseServer) renderResources(ch *chart.Chart, values chartutil.Values, vs chartutil.VersionSet) ([]*release.Hook, []*release.Crd, *bytes.Buffer, string, error) {
 	// Guard to make sure Helm is at the right version to handle this chart.
 	sver := version.GetVersion()
 	if ch.Metadata.HelmVersion != "" &&
 		!version.IsCompatibleRange(ch.Metadata.HelmVersion, sver) {
-		return nil, nil, "", errors.Errorf("chart incompatible with Helm %s", sver)
+		return nil, nil, nil, "", errors.Errorf("chart incompatible with Helm %s", sver)
 	}
 
 	if ch.Metadata.KubeVersion != "" {
@@ -235,14 +237,14 @@ func (s *ReleaseServer) renderResources(ch *chart.Chart, values chartutil.Values
 		gitVersion := cap.KubeVersion.String()
 		k8sVersion := strings.Split(gitVersion, "+")[0]
 		if !version.IsCompatibleRange(ch.Metadata.KubeVersion, k8sVersion) {
-			return nil, nil, "", errors.Errorf("chart requires kubernetesVersion: %s which is incompatible with Kubernetes %s", ch.Metadata.KubeVersion, k8sVersion)
+			return nil, nil, nil, "", errors.Errorf("chart requires kubernetesVersion: %s which is incompatible with Kubernetes %s", ch.Metadata.KubeVersion, k8sVersion)
 		}
 	}
 
 	s.Log("rendering %s chart using values", ch.Name())
 	files, err := s.engine.Render(ch, values)
 	if err != nil {
-		return nil, nil, "", err
+		return nil, nil, nil, "", err
 	}
 
 	// NOTES.txt gets rendered like all the other files, but because it's not a hook nor a resource,
@@ -265,7 +267,7 @@ func (s *ReleaseServer) renderResources(ch *chart.Chart, values chartutil.Values
 	// Sort hooks, manifests, and partials. Only hooks and manifests are returned,
 	// as partials are not used after renderer.Render. Empty manifests are also
 	// removed here.
-	hooks, manifests, err := SortManifests(files, vs, InstallOrder)
+	hooks, crds, manifests, err := SortManifests(files, vs, InstallOrder)
 	if err != nil {
 		// By catching parse errors here, we can prevent bogus releases from going
 		// to Kubernetes.
@@ -280,7 +282,7 @@ func (s *ReleaseServer) renderResources(ch *chart.Chart, values chartutil.Values
 			b.WriteString("\n---\n# Source: " + name + "\n")
 			b.WriteString(content)
 		}
-		return nil, b, "", err
+		return nil, nil, b, "", err
 	}
 
 	// Aggregate all valid manifests into one big doc.
@@ -290,7 +292,7 @@ func (s *ReleaseServer) renderResources(ch *chart.Chart, values chartutil.Values
 		b.WriteString(m.Content)
 	}
 
-	return hooks, b, notes, nil
+	return hooks, crds, b, notes, nil
 }
 
 // recordRelease with an update operation in case reuse has been set.
@@ -361,6 +363,7 @@ func (s *ReleaseServer) execHook(hs []*release.Hook, name, namespace, hook strin
 
 func validateManifest(c environment.KubeClient, ns string, manifest []byte) error {
 	r := bytes.NewReader(manifest)
+	fmt.Printf("Client is %s\n", reflect.TypeOf(c).String())
 	_, err := c.BuildUnstructured(ns, r)
 	return err
 }
